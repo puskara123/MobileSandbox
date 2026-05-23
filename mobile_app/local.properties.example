@@ -1,0 +1,11 @@
+# Copy this file to mobile_app/local.properties and update paths for your machine.
+#
+# Android Studio usually manages sdk.dir automatically. Keep this file out of
+# git because it contains local machine paths.
+sdk.dir=/absolute/path/to/Android/Sdk
+
+# Emulator default:
+analysis.api.base.url=http://10.0.2.2:8000/
+
+# Physical device example:
+# analysis.api.base.url=http://192.168.1.42:8000/
