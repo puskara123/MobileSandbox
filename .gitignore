@@ -1,6 +1,7 @@
 analysis_server/venv/
 analysis_server/.pytest_cache/
 analysis_server/__pycache__/
+analysis_server/*.db
 **/__pycache__/
 *.py[cod]
 
