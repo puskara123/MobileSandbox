@@ -58,6 +58,17 @@
 
         </LinearLayout>
 
+        <!-- Plain-English summary (Step 4). Hidden by the adapter for scans
+             saved before Step 2, which have no risk_summary. -->
+        <TextView
+            android:id="@+id/tvSummary"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textSize="12sp"
+            android:textColor="#616161"
+            android:visibility="gone" />
+
     </LinearLayout>
 
 </androidx.cardview.widget.CardView>

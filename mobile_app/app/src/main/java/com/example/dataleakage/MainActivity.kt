@@ -154,7 +154,7 @@ class MainActivity : AppCompatActivity() {
                         addAppResult(
                             container, label, app.packageName, icon, response.risk_level,
                             response.score, response.pii_detected,
-                            response.sensitive_detected, permissions
+                            response.sensitive_detected, RiskExplanation.from(response), permissions
                         )
                     } catch (e: Exception) {
                         addError(container, app.packageName)
@@ -264,7 +264,8 @@ class MainActivity : AppCompatActivity() {
                 addPreInstallScanResult(
                     container, staged, uris, packageName, appLabel, appIcon,
                     response.risk_level, response.score,
-                    response.pii_detected, response.sensitive_detected, permissions
+                    response.pii_detected, response.sensitive_detected,
+                    RiskExplanation.from(response), permissions
                 )
             } catch (_: Exception) {
                 ApkPreInstallStaging.deleteStagedList(staged)
@@ -315,6 +316,7 @@ class MainActivity : AppCompatActivity() {
         score: Int,
         pii: List<String>,
         sensitive: List<String>,
+        explanation: RiskExplanation,
         permissions: List<String>
     ) {
         val cardView = ResultCard.build(
@@ -327,6 +329,7 @@ class MainActivity : AppCompatActivity() {
                 score = score,
                 pii = pii,
                 sensitive = sensitive,
+                explanation = explanation,
             ),
             feedbackContent = { row ->
                 val btnMarkSafe = MaterialButton(
@@ -387,6 +390,7 @@ class MainActivity : AppCompatActivity() {
         score: Int,
         pii: List<String>,
         sensitive: List<String>,
+        explanation: RiskExplanation,
         permissions: List<String>
     ) {
         // Declared before ResultCard.build() so the Reject button's click
@@ -409,6 +413,7 @@ class MainActivity : AppCompatActivity() {
                 score = score,
                 pii = pii,
                 sensitive = sensitive,
+                explanation = explanation,
             ),
             topExtra = { inner ->
                 val sandboxHint = TextView(this).apply {

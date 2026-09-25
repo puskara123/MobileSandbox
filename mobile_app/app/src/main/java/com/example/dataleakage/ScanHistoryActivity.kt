@@ -52,6 +52,7 @@ class ScanHistoryAdapter(private val items: List<ScanRecord>)
         val tvRiskLevel = view.findViewById<TextView>(R.id.tvRiskLevel)
         val tvScore     = view.findViewById<TextView>(R.id.tvScore)
         val tvTimestamp = view.findViewById<TextView>(R.id.tvTimestamp)
+        val tvSummary   = view.findViewById<TextView>(R.id.tvSummary)
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
@@ -81,5 +82,15 @@ class ScanHistoryAdapter(private val items: List<ScanRecord>)
         // Show only date + time portion (trim microseconds)
         val ts = item.timestamp?.take(19)?.replace("T", "  ") ?: ""
         holder.tvTimestamp.text = ts
+
+        // Blank/null for scans saved before Step 2's migration — hide the row
+        // entirely rather than show an empty line.
+        val summary = item.risk_summary
+        if (summary.isNullOrBlank()) {
+            holder.tvSummary.visibility = View.GONE
+        } else {
+            holder.tvSummary.visibility = View.VISIBLE
+            holder.tvSummary.text = summary
+        }
     }
 }
