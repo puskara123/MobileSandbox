@@ -4,6 +4,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
+import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -139,9 +140,22 @@ class MainActivity : AppCompatActivity() {
                                 AnalysisRequest(app.packageName, permissions)
                             )
                         }
-                        addAppResult(container, response.app, response.risk_level,
-                            response.score, response.score_min, response.score_max, response.pii_detected,
-                            response.sensitive_detected, permissions)
+                        // Real app name + icon via PackageManager, instead of the
+                        // raw package name /analyze happens to echo back.
+                        val (label, icon) = withContext(Dispatchers.IO) {
+                            val loadedLabel = app.loadLabel(packageManager).toString()
+                            val loadedIcon = try {
+                                app.loadIcon(packageManager)
+                            } catch (_: Exception) {
+                                null
+                            }
+                            loadedLabel to loadedIcon
+                        }
+                        addAppResult(
+                            container, label, app.packageName, icon, response.risk_level,
+                            response.score, response.pii_detected,
+                            response.sensitive_detected, permissions
+                        )
                     } catch (e: Exception) {
                         addError(container, app.packageName)
                     }
@@ -237,12 +251,18 @@ class MainActivity : AppCompatActivity() {
             }
             val packageName = pkgInfo.packageName ?: "unknown"
             val permissions = ApkPreInstallStaging.permissionsList(pkgInfo)
+            // Read the app's real name/icon off the APK file itself — for a split
+            // set, base.apk is the one that carries the launcher icon/label.
+            val iconSourceFile = ApkPreInstallStaging.findBaseApk(staged) ?: staged.first()
+            val (appLabel, appIcon) = withContext(Dispatchers.IO) {
+                ApkPreInstallStaging.loadLabelAndIcon(this@MainActivity, pkgInfo, iconSourceFile)
+            }
             try {
                 val response = withContext(Dispatchers.IO) {
                     RetrofitClient.api.analyzeApp(AnalysisRequest(packageName, permissions))
                 }
                 addPreInstallScanResult(
-                    container, staged, uris, packageName,
+                    container, staged, uris, packageName, appLabel, appIcon,
                     response.risk_level, response.score,
                     response.pii_detected, response.sensitive_detected, permissions
                 )
@@ -281,389 +301,241 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Thin wrapper around [ResultCard.build] for the "scan all installed
+     * apps" flow. Was previously a ~120-line function building the same
+     * card markup by hand — see ResultCard.kt for the shared builder.
+     */
     private fun addAppResult(
         container: LinearLayout,
         appName: String,
+        packageName: String,
+        icon: Drawable?,
         level: String,
         score: Int,
-        scoreMin: Int,
-        scoreMax: Int,
         pii: List<String>,
         sensitive: List<String>,
         permissions: List<String>
     ) {
-        val cardView = MaterialCardView(this).apply {
-            radius = 48f
-            cardElevation = 18f
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).also { it.setMargins(0, 0, 0, 48) }
-        }
+        val cardView = ResultCard.build(
+            context = this,
+            data = ResultCard.Data(
+                appName = appName,
+                packageName = packageName,
+                icon = icon,
+                level = level,
+                score = score,
+                pii = pii,
+                sensitive = sensitive,
+            ),
+            feedbackContent = { row ->
+                val btnMarkSafe = MaterialButton(
+                    this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle
+                ).apply {
+                    text = "Safe"
+                    setIconResource(android.R.drawable.ic_menu_preferences)
+                    iconTint = android.content.res.ColorStateList.valueOf(Color.parseColor("#2ECC71"))
+                }
+                val btnMarkMalware = MaterialButton(
+                    this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle
+                ).apply {
+                    text = "Malware"
+                    setIconResource(android.R.drawable.ic_dialog_alert)
+                    iconTint = android.content.res.ColorStateList.valueOf(Color.parseColor("#E74C3C"))
+                }
 
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                val submitFeedback: (Boolean) -> Unit = { isMalware ->
+                    btnMarkSafe.isEnabled = false
+                    btnMarkMalware.isEnabled = false
+                    btnMarkSafe.alpha = 0.4f
+                    btnMarkMalware.alpha = 0.4f
+                    // NOTE (carried over unchanged from before this refactor):
+                    // this sends `appName` (the display name) as the
+                    // package_name field, not `packageName`. Flagged to you
+                    // separately — not fixed here, to keep this step's diff
+                    // to card structure/consistency only.
+                    sendFeedback(appName, permissions, isMalware, container)
+                }
+                btnMarkSafe.setOnClickListener { submitFeedback(false) }
+                btnMarkMalware.setOnClickListener { submitFeedback(true) }
 
-        val levelColor = when (level) {
-            "DANGEROUS"        -> Color.parseColor("#E74C3C")
-            "SUSPICIOUS"       -> Color.parseColor("#E67E22")
-            "HANDLE_WITH_CARE" -> Color.parseColor("#F39C12")
-            else               -> Color.parseColor("#2ECC71")
-        }
-
-        val stripe = View(this).apply {
-            setBackgroundColor(levelColor)
-            layoutParams = LinearLayout.LayoutParams(12, LinearLayout.LayoutParams.MATCH_PARENT)
-        }
-        row.addView(stripe)
-
-        val inner = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(48, 36, 48, 36)
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-        }
-
-        val displayLevel = level.replace("_", " ")
-
-        val title = TextView(this).apply {
-            text = appName
-            setTextAppearance(this@MainActivity, android.R.style.TextAppearance_Material_Title) // TitleMedium equivalent or Material Components Title
-            textSize = 20f
-            setTextColor(Color.parseColor("#1A237E"))
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-        }
-
-        val badgeAndScore = LinearLayout(this).apply { 
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 16, 0, 16)
-        }
-        
-        val riskBadge = TextView(this).apply {
-            text = displayLevel
-            textSize = 14f
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-            setTextColor(levelColor)
-            layoutParams = LinearLayout.LayoutParams(
-                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
-            )
-        }
-        
-        val scoreLabel = TextView(this).apply {
-            text = "$scoreMin - $scoreMax / 100"
-            textSize = 28f // large 28sp font
-            setTextColor(levelColor)
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-        }
-
-        badgeAndScore.addView(riskBadge)
-        badgeAndScore.addView(scoreLabel)
-
-        val speedometer = SpeedometerView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 280
-            )
-            setScore(score) // Internal expects 0-100 
-        }
-
-        val piiText = TextView(this).apply {
-            text = "PII: ${if (pii.isEmpty()) "None" else pii.joinToString(", ")}"
-            textSize = 12f
-            setTextColor(Color.parseColor("#000000"))
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).also { it.topMargin = 16 }
-        }
-
-        val sensitiveText = TextView(this).apply {
-            text = "Sensitive: ${if (sensitive.isEmpty()) "None" else sensitive.joinToString(", ")}"
-            textSize = 12f
-            setTextColor(Color.parseColor("#000000"))
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).also { it.topMargin = 8 }
-        }
-
-        val feedbackLayout = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 32, 0, 0)
-        }
-
-        val btnMarkSafe = MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply { 
-            text = "Safe"
-            setIconResource(android.R.drawable.ic_menu_preferences) // basic check mark
-            iconTint = android.content.res.ColorStateList.valueOf(Color.parseColor("#2ECC71"))
-        }
-        
-        val btnMarkMalware = MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply { 
-            text = "Malware"
-            setIconResource(android.R.drawable.ic_dialog_alert)
-            iconTint = android.content.res.ColorStateList.valueOf(Color.parseColor("#E74C3C"))
-        }
-
-        val submitFeedback: (Boolean) -> Unit = { isMalware ->
-            btnMarkSafe.isEnabled = false
-            btnMarkMalware.isEnabled = false
-            btnMarkSafe.alpha = 0.4f
-            btnMarkMalware.alpha = 0.4f
-            sendFeedback(appName, permissions, isMalware, cardView)
-        }
-        btnMarkSafe.setOnClickListener { submitFeedback(false) }
-        btnMarkMalware.setOnClickListener { submitFeedback(true) }
-
-        feedbackLayout.addView(btnMarkSafe, LinearLayout.LayoutParams(
-            0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).also { it.rightMargin = 16 })
-        feedbackLayout.addView(btnMarkMalware, LinearLayout.LayoutParams(
-            0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-
-        inner.addView(title)
-        inner.addView(badgeAndScore)
-        inner.addView(speedometer)
-        inner.addView(piiText)
-        inner.addView(sensitiveText)
-        inner.addView(feedbackLayout)
-        
-        row.addView(inner)
-        cardView.addView(row)
+                row.addView(btnMarkSafe, LinearLayout.LayoutParams(
+                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
+                ).also { it.rightMargin = 16 })
+                row.addView(btnMarkMalware, LinearLayout.LayoutParams(
+                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
+                ))
+            }
+        )
         container.addView(cardView)
     }
 
+    /**
+     * Thin wrapper around [ResultCard.build] for the pre-install APK flow.
+     * Was previously a ~240-line function building the same card markup by
+     * hand (with the app name always shown as the package name) — see
+     * ResultCard.kt for the shared builder.
+     */
     private fun addPreInstallScanResult(
         container: LinearLayout,
         stagedParts: List<File>,
         sourceUris: List<Uri>,
         packageName: String,
+        appLabel: String,
+        appIcon: Drawable?,
         level: String,
         score: Int,
         pii: List<String>,
         sensitive: List<String>,
         permissions: List<String>
     ) {
-        val cardView = MaterialCardView(this).apply {
-            radius = 48f
-            cardElevation = 18f
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).also { it.setMargins(0, 0, 0, 48) }
-        }
-
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-
-        val levelColor = when (level) {
-            "DANGEROUS"        -> Color.parseColor("#E74C3C")
-            "SUSPICIOUS"       -> Color.parseColor("#E67E22")
-            "HANDLE_WITH_CARE" -> Color.parseColor("#F39C12")
-            else               -> Color.parseColor("#2ECC71")
-        }
-
-        val stripe = View(this).apply {
-            setBackgroundColor(levelColor)
-            layoutParams = LinearLayout.LayoutParams(12, LinearLayout.LayoutParams.MATCH_PARENT)
-        }
-        row.addView(stripe)
-
-        val inner = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(48, 36, 48, 36)
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-        }
-
-        val displayLevel = level.replace("_", " ")
-
-        val title = TextView(this).apply {
-            text = packageName
-            setTextAppearance(this@MainActivity, android.R.style.TextAppearance_Material_Title)
-            textSize = 20f
-            setTextColor(Color.parseColor("#1A237E"))
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-        }
-
-        val sandboxHint = TextView(this).apply {
-            val n = stagedParts.size
-            text = buildString {
-                if (n <= 1) {
-                    append("Pre-install scan — copy is in app sandbox only. ")
-                } else {
-                    append("Pre-install scan — $n APK parts in sandbox. ")
-                }
-                append("Reject removes the sandbox copy and, when allowed, the file(s) you picked in Downloads/Files. ")
-                append("Tap “Install to device” for Android’s install prompt (emulator: also check the notification shade if nothing pops up). ")
-                append("For store-style bundles (e.g. Reddit), multi-select every split from the same .apks extract (arch, density, language) or install fails with “missing split”. ")
-                append("Browser downloads use Chrome, not this app — use Files or adb push.")
-            }
-            textSize = 11f
-            setTextColor(Color.parseColor("#5C6BC0"))
-            setPadding(0, 8, 0, 0)
-        }
-
-        val badgeAndScore = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 16, 0, 16)
-        }
-
-        val riskBadge = TextView(this).apply {
-            text = displayLevel
-            textSize = 14f
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-            setTextColor(levelColor)
-            layoutParams = LinearLayout.LayoutParams(
-                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
-            )
-        }
-
-        val scoreLabel = TextView(this).apply {
-            text = "Risk: $score / 100"
-            textSize = 28f
-            setTextColor(levelColor)
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-        }
-
-        badgeAndScore.addView(riskBadge)
-        badgeAndScore.addView(scoreLabel)
-
-        val speedometer = SpeedometerView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 280
-            )
-            setScore(score)
-        }
-
-        val piiText = TextView(this).apply {
-            text = "PII: ${if (pii.isEmpty()) "None" else pii.joinToString(", ")}"
-            textSize = 12f
-            setTextColor(Color.parseColor("#000000"))
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).also { it.topMargin = 16 }
-        }
-
-        val sensitiveText = TextView(this).apply {
-            text = "Sensitive: ${if (sensitive.isEmpty()) "None" else sensitive.joinToString(", ")}"
-            textSize = 12f
-            setTextColor(Color.parseColor("#000000"))
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).also { it.topMargin = 8 }
-        }
-
-        val decisionRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 32, 0, 0)
-        }
-
-        val btnInstall = MaterialButton(this).apply {
-            text = "Install to device"
-            setBackgroundColor(Color.parseColor("#2ECC71"))
-        }
-        val btnReject = MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
-            text = "Reject & delete"
-            setStrokeColor(android.content.res.ColorStateList.valueOf(Color.parseColor("#E74C3C")))
-        }
-
+        // Declared before ResultCard.build() so the Reject button's click
+        // listener (built inside bottomExtra, below) can remove the card
+        // once it exists. The listener only runs later, on tap — by which
+        // time this is already assigned — so this is safe despite the
+        // forward reference.
+        lateinit var cardView: MaterialCardView
         fun removeCard() {
             (cardView.parent as? ViewGroup)?.removeView(cardView)
         }
 
-        btnInstall.setOnClickListener {
-            try {
-                val splitLooking = stagedParts.any {
-                    it.name.startsWith("split_config", ignoreCase = true)
+        cardView = ResultCard.build(
+            context = this,
+            data = ResultCard.Data(
+                appName = appLabel,
+                packageName = packageName,
+                icon = appIcon,
+                level = level,
+                score = score,
+                pii = pii,
+                sensitive = sensitive,
+            ),
+            topExtra = { inner ->
+                val sandboxHint = TextView(this).apply {
+                    val n = stagedParts.size
+                    text = buildString {
+                        if (n <= 1) {
+                            append("Pre-install scan — copy is in app sandbox only. ")
+                        } else {
+                            append("Pre-install scan — $n APK parts in sandbox. ")
+                        }
+                        append("Reject removes the sandbox copy and, when allowed, the file(s) you picked in Downloads/Files. ")
+                        append("Tap “Install to device” for Android’s install prompt (emulator: also check the notification shade if nothing pops up). ")
+                        append("For store-style bundles (e.g. Reddit), multi-select every split from the same .apks extract (arch, density, language) or install fails with “missing split”. ")
+                        append("Browser downloads use Chrome, not this app — use Files or adb push.")
+                    }
+                    textSize = 11f
+                    setTextColor(Color.parseColor("#5C6BC0"))
+                    setPadding(0, 8, 0, 0)
                 }
-                if (stagedParts.size == 1 &&
-                    stagedParts.first().name.equals("base.apk", ignoreCase = true) &&
-                    !splitLooking
-                ) {
-                    Toast.makeText(
-                        this,
-                        "Split APK: pick base.apk and every split_config.*.apk in one go (same as adb install-multiple).",
-                        Toast.LENGTH_LONG
-                    ).show()
-                    return@setOnClickListener
+                inner.addView(sandboxHint)
+            },
+            bottomExtra = { inner ->
+                val decisionRow = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    setPadding(0, 32, 0, 0)
                 }
-                launchSessionInstall(stagedParts, packageName)
-            } catch (e: Exception) {
-                Toast.makeText(this, "Could not open installer: ${e.message}", Toast.LENGTH_LONG).show()
-            }
-        }
 
-        btnReject.setOnClickListener {
-            ApkPreInstallStaging.deleteStagedList(stagedParts)
-            val del = ApkPreInstallStaging.tryDeleteSourceUris(this, sourceUris)
-            for (uri in sourceUris) {
-                try {
-                    contentResolver.releasePersistableUriPermission(
-                        uri,
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                    )
-                } catch (_: Exception) {
+                val btnInstall = MaterialButton(this).apply {
+                    text = "Install to device"
+                    setBackgroundColor(Color.parseColor("#2ECC71"))
                 }
+                val btnReject = MaterialButton(
+                    this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle
+                ).apply {
+                    text = "Reject & delete"
+                    setStrokeColor(android.content.res.ColorStateList.valueOf(Color.parseColor("#E74C3C")))
+                }
+
+                btnInstall.setOnClickListener {
+                    try {
+                        val splitLooking = stagedParts.any {
+                            it.name.startsWith("split_config", ignoreCase = true)
+                        }
+                        if (stagedParts.size == 1 &&
+                            stagedParts.first().name.equals("base.apk", ignoreCase = true) &&
+                            !splitLooking
+                        ) {
+                            Toast.makeText(
+                                this,
+                                "Split APK: pick base.apk and every split_config.*.apk in one go (same as adb install-multiple).",
+                                Toast.LENGTH_LONG
+                            ).show()
+                            return@setOnClickListener
+                        }
+                        launchSessionInstall(stagedParts, packageName)
+                    } catch (e: Exception) {
+                        Toast.makeText(this, "Could not open installer: ${e.message}", Toast.LENGTH_LONG).show()
+                    }
+                }
+
+                btnReject.setOnClickListener {
+                    ApkPreInstallStaging.deleteStagedList(stagedParts)
+                    val del = ApkPreInstallStaging.tryDeleteSourceUris(this, sourceUris)
+                    for (uri in sourceUris) {
+                        try {
+                            contentResolver.releasePersistableUriPermission(
+                                uri,
+                                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                            )
+                        } catch (_: Exception) {
+                        }
+                    }
+                    removeCard()
+                    val msg = when {
+                        sourceUris.isEmpty() ->
+                            "Sandbox copy removed."
+                        del.failedCount == 0 ->
+                            "Removed sandbox copy and ${del.deletedCount} original file(s)."
+                        del.deletedCount == 0 ->
+                            "Sandbox copy removed. Originals are still in Downloads — delete them in Files (picker did not allow remove)."
+                        else ->
+                            "Sandbox removed. Deleted ${del.deletedCount} original(s); ${del.failedCount} left in Downloads."
+                    }
+                    Snackbar.make(container, msg, Snackbar.LENGTH_LONG).show()
+                }
+
+                decisionRow.addView(btnInstall, LinearLayout.LayoutParams(
+                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
+                ).also { it.rightMargin = 16 })
+                decisionRow.addView(btnReject, LinearLayout.LayoutParams(
+                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
+                ))
+                inner.addView(decisionRow)
+            },
+            feedbackContent = { row ->
+                val btnMarkSafe = MaterialButton(
+                    this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle
+                ).apply {
+                    text = "Mark safe"
+                    iconTint = android.content.res.ColorStateList.valueOf(Color.parseColor("#2ECC71"))
+                }
+                val btnMarkMalware = MaterialButton(
+                    this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle
+                ).apply {
+                    text = "Mark malware"
+                    iconTint = android.content.res.ColorStateList.valueOf(Color.parseColor("#E74C3C"))
+                }
+
+                val submitFeedback: (Boolean) -> Unit = { isMalware ->
+                    btnMarkSafe.isEnabled = false
+                    btnMarkMalware.isEnabled = false
+                    btnMarkSafe.alpha = 0.4f
+                    btnMarkMalware.alpha = 0.4f
+                    sendFeedback(packageName, permissions, isMalware, container)
+                }
+                btnMarkSafe.setOnClickListener { submitFeedback(false) }
+                btnMarkMalware.setOnClickListener { submitFeedback(true) }
+
+                row.addView(btnMarkSafe, LinearLayout.LayoutParams(
+                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
+                ).also { it.rightMargin = 16 })
+                row.addView(btnMarkMalware, LinearLayout.LayoutParams(
+                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
+                ))
             }
-            removeCard()
-            val msg = when {
-                sourceUris.isEmpty() ->
-                    "Sandbox copy removed."
-                del.failedCount == 0 ->
-                    "Removed sandbox copy and ${del.deletedCount} original file(s)."
-                del.deletedCount == 0 ->
-                    "Sandbox copy removed. Originals are still in Downloads — delete them in Files (picker did not allow remove)."
-                else ->
-                    "Sandbox removed. Deleted ${del.deletedCount} original(s); ${del.failedCount} left in Downloads."
-            }
-            Snackbar.make(container, msg, Snackbar.LENGTH_LONG).show()
-        }
+        )
 
-        decisionRow.addView(btnInstall, LinearLayout.LayoutParams(
-            0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
-        ).also { it.rightMargin = 16 })
-        decisionRow.addView(btnReject, LinearLayout.LayoutParams(
-            0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
-        ))
-
-        val feedbackLayout = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 24, 0, 0)
-        }
-
-        val btnMarkSafe = MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
-            text = "Mark safe"
-            iconTint = android.content.res.ColorStateList.valueOf(Color.parseColor("#2ECC71"))
-        }
-        val btnMarkMalware = MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
-            text = "Mark malware"
-            iconTint = android.content.res.ColorStateList.valueOf(Color.parseColor("#E74C3C"))
-        }
-
-        val submitFeedback: (Boolean) -> Unit = { isMalware ->
-            btnMarkSafe.isEnabled = false
-            btnMarkMalware.isEnabled = false
-            btnMarkSafe.alpha = 0.4f
-            btnMarkMalware.alpha = 0.4f
-            sendFeedback(packageName, permissions, isMalware, cardView)
-        }
-        btnMarkSafe.setOnClickListener { submitFeedback(false) }
-        btnMarkMalware.setOnClickListener { submitFeedback(true) }
-
-        feedbackLayout.addView(btnMarkSafe, LinearLayout.LayoutParams(
-            0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
-        ).also { it.rightMargin = 16 })
-        feedbackLayout.addView(btnMarkMalware, LinearLayout.LayoutParams(
-            0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
-        ))
-
-        inner.addView(title)
-        inner.addView(sandboxHint)
-        inner.addView(badgeAndScore)
-        inner.addView(speedometer)
-        inner.addView(piiText)
-        inner.addView(sensitiveText)
-        inner.addView(decisionRow)
-        inner.addView(feedbackLayout)
-
-        row.addView(inner)
-        cardView.addView(row)
         container.addView(cardView, 0)
     }
 

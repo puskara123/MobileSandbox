@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
+import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.os.Build
 import android.provider.DocumentsContract
@@ -127,6 +128,34 @@ object ApkPreInstallStaging {
 
     fun permissionsList(info: PackageInfo): List<String> =
         info.requestedPermissions?.toList() ?: emptyList()
+
+    /**
+     * Best-effort app name + icon read directly from a staged (not
+     * installed) APK file. PackageManager.getPackageArchiveInfo() returns
+     * an ApplicationInfo whose sourceDir/publicSourceDir are empty, which
+     * makes loadLabel()/loadIcon() silently fail unless those are pointed
+     * at the actual file on disk first — that's what this does. Falls back
+     * to the package name and a null icon (the caller substitutes a
+     * default icon) if anything goes wrong.
+     */
+    fun loadLabelAndIcon(context: Context, info: PackageInfo, apkFile: File): Pair<String, Drawable?> {
+        val appInfo = info.applicationInfo ?: return (info.packageName ?: "unknown") to null
+        return try {
+            appInfo.sourceDir = apkFile.absolutePath
+            appInfo.publicSourceDir = apkFile.absolutePath
+            val pm = context.packageManager
+            val label = appInfo.loadLabel(pm)?.toString()?.takeIf { it.isNotBlank() }
+                ?: (info.packageName ?: "unknown")
+            val icon = try {
+                appInfo.loadIcon(pm)
+            } catch (_: Exception) {
+                null
+            }
+            label to icon
+        } catch (_: Exception) {
+            (info.packageName ?: "unknown") to null
+        }
+    }
 
     fun deleteStaged(apkFile: File?) {
         try {

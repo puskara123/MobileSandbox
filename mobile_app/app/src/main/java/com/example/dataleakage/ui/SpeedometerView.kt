@@ -6,6 +6,7 @@ import android.graphics.*
 import android.util.AttributeSet
 import android.view.View
 import android.view.animation.DecelerateInterpolator
+import com.example.dataleakage.RiskLevel
 import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
@@ -71,24 +72,26 @@ class SpeedometerView @JvmOverloads constructor(
             centerY + radius
         )
 
-        // 4-segment arc: GREEN (0-30) → ORANGE (30-50) → YELLOW (50-70) → RED (70-100)
-        // Total sweep = 180°. Each unit = 1.8°.
+        // 4-segment arc matching the backend's real thresholds (30 / 55 / 75)
+        // and RiskLevel's shared colours — was previously 30/50/70 with its
+        // own separate colour set, out of sync with both.
+        // Total sweep = 180°. Each score unit = 1.8°.
 
-        // GREEN ARC (0–30): 30 units × 1.8° = 54°
-        arcPaint.color = Color.parseColor("#4CAF50")
+        // SAFE (0–30): 30 units × 1.8° = 54°
+        arcPaint.color = RiskLevel.SAFE.color
         canvas.drawArc(rect, 180f, 54f, false, arcPaint)
 
-        // ORANGE ARC (30–50): 20 units × 1.8° = 36°  — HANDLE WITH CARE
-        arcPaint.color = Color.parseColor("#FF9800")
-        canvas.drawArc(rect, 234f, 36f, false, arcPaint)
+        // HANDLE_WITH_CARE (30–55): 25 units × 1.8° = 45°
+        arcPaint.color = RiskLevel.HANDLE_WITH_CARE.color
+        canvas.drawArc(rect, 234f, 45f, false, arcPaint)
 
-        // YELLOW ARC (50–70): 20 units × 1.8° = 36°
-        arcPaint.color = Color.parseColor("#FFC107")
-        canvas.drawArc(rect, 270f, 36f, false, arcPaint)
+        // SUSPICIOUS (55–75): 20 units × 1.8° = 36°
+        arcPaint.color = RiskLevel.SUSPICIOUS.color
+        canvas.drawArc(rect, 279f, 36f, false, arcPaint)
 
-        // RED ARC (70–100): 30 units × 1.8° = 54°
-        arcPaint.color = Color.parseColor("#F44336")
-        canvas.drawArc(rect, 306f, 54f, false, arcPaint)
+        // DANGEROUS (75–100): 25 units × 1.8° = 45°
+        arcPaint.color = RiskLevel.DANGEROUS.color
+        canvas.drawArc(rect, 315f, 45f, false, arcPaint)
 
         // Needle angle (maps 0–100 score to 180°–360° sweep)
         val angle = 180 + (animatedScore * 1.8f)

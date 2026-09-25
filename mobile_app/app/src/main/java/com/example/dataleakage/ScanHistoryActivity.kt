@@ -1,6 +1,5 @@
 package com.example.dataleakage
 
-import android.graphics.Color
 import android.os.Bundle
 import android.widget.TextView
 import android.widget.Toast
@@ -68,17 +67,14 @@ class ScanHistoryAdapter(private val items: List<ScanRecord>)
 
         holder.tvPackage.text = "📦 ${item.package_name}"
 
-        val (emoji, color) = when (item.risk_level) {
-            "DANGEROUS"        -> "🔴" to Color.parseColor("#D32F2F")
-            "SUSPICIOUS"       -> "🟡" to Color.parseColor("#F57F17")
-            "HANDLE_WITH_CARE" -> "🟠" to Color.parseColor("#E65100")
-            else               -> "🟢" to Color.parseColor("#2E7D32")
-        }
-
-        val displayLevel = item.risk_level.replace("_", " ")
-        holder.tvRiskLevel.text = "$emoji $displayLevel"
+        // RiskLevel is the single source of truth for colour/emoji/name, so
+        // this can never drift out of sync with the result cards again —
+        // it previously had its own hard-coded set where SUSPICIOUS and
+        // HANDLE_WITH_CARE's emoji/colour were accidentally swapped.
+        val riskLevel = RiskLevel.fromCode(item.risk_level)
+        holder.tvRiskLevel.text = "${riskLevel.emoji} ${riskLevel.displayName}"
         holder.tvRiskLevel.backgroundTintList =
-            android.content.res.ColorStateList.valueOf(color)
+            android.content.res.ColorStateList.valueOf(riskLevel.color)
 
         holder.tvScore.text = "Score: ${"%.1f".format(item.score)}"
 
