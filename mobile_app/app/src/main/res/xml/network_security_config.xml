@@ -1,6 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="true">10.0.2.2</domain>
-    </domain-config>
+    <!--
+        Allows plain HTTP (no HTTPS) to any address, so the app can reach the
+        analysis server whether it's on the emulator (10.0.2.2), your laptop's
+        Wi-Fi IP, or 127.0.0.1 through "adb reverse". Without this, Android 9+
+        blocks plain HTTP to anything not explicitly listed.
+
+        Research prototype only: switch the server to HTTPS and remove this
+        before handing the app to anyone outside your own testing.
+    -->
+    <base-config cleartextTrafficPermitted="true" />
 </network-security-config>
