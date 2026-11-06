@@ -4,6 +4,7 @@ from typing import Optional, List
 import uvicorn
 import ml_engine
 import db_manager
+import plain_english
 import random
 import numpy as np
 
@@ -62,6 +63,11 @@ async def analyze(data: AppData):
         f"{base_result['leak_type']} (Range: {min_score}–{max_score})"
     )
 
+    # Plain-English explanation of the same result, for non-technical users.
+    # Pure function of (permissions, level): doesn't touch the ML model and
+    # doesn't affect the score.
+    explanation = plain_english.explain(data.permissions, base_result["level"])
+
     db_manager.save_scan_result(
         package_name=data.package_name,
         risk_level=base_result["level"],
@@ -72,6 +78,7 @@ async def analyze(data: AppData):
         detected_threats=base_result["flags"],
         confidence=base_result.get("confidence", 1.0),
         user_id=data.user_id,
+        risk_summary=explanation["risk_summary"],
     )
 
     return {
@@ -86,6 +93,10 @@ async def analyze(data: AppData):
         "sensitive_detected": base_result["sensitive_detected"],
         "detected_threats": base_result["flags"],
         "confidence": base_result.get("confidence", 1.0),
+        "risk_summary": explanation["risk_summary"],
+        "risk_reasons": explanation["risk_reasons"],
+        "risk_patterns": explanation["risk_patterns"],
+        "minor_permissions": explanation["minor_permissions"],
     }
 
 

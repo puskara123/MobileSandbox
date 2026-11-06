@@ -88,6 +88,11 @@ def init_db():
         c.execute("ALTER TABLE scan_history ADD COLUMN user_id TEXT DEFAULT 'anonymous'")
         print("[db_manager] Migrated scan_history: added user_id column.")
 
+    # ── Migrate scan_history: add risk_summary column if missing ──
+    if "risk_summary" not in scan_cols:
+        c.execute("ALTER TABLE scan_history ADD COLUMN risk_summary TEXT DEFAULT ''")
+        print("[db_manager] Migrated scan_history: added risk_summary column.")
+
     # ── SQLite VIEW: per-permission feedback aggregates (fast querying) ──
     c.execute("DROP VIEW IF EXISTS feedback_summary")
     # Note: SQLite does not support JSON functions universally, so the view
@@ -270,12 +275,15 @@ def is_duplicate_scan(package_name: str, window_minutes: int = 5) -> bool:
 def save_scan_result(package_name: str, risk_level: str, score: float,
                      leak_type: str, pii_detected: list,
                      sensitive_detected: list, detected_threats: list,
-                     confidence: float = 1.0, user_id: str = "anonymous"):
+                     confidence: float = 1.0, user_id: str = "anonymous",
+                     risk_summary: str = ""):
     """
     Persist an analysis result.
     Skips insertion if the same package was scanned within 5 minutes
     (deduplication guard).
     confidence: [0–1] signal-agreement score from ml_engine (FIX-v2-6).
+    risk_summary: one-line plain-English summary from plain_english.explain().
+                  Defaults to '' so existing callers keep working.
     """
     if is_duplicate_scan(package_name):
         return  # skip duplicate
@@ -286,8 +294,8 @@ def save_scan_result(package_name: str, risk_level: str, score: float,
         """INSERT INTO scan_history
            (package_name, risk_level, score, leak_type,
             pii_detected, sensitive_detected, detected_threats,
-            confidence, timestamp, user_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            confidence, timestamp, user_id, risk_summary)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             package_name,
             risk_level,
@@ -298,7 +306,8 @@ def save_scan_result(package_name: str, risk_level: str, score: float,
             json.dumps(detected_threats),
             confidence,
             datetime.utcnow().isoformat(),
-            user_id
+            user_id,
+            risk_summary,
         )
     )
     conn.commit()
